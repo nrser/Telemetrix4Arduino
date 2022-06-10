@@ -178,6 +178,7 @@
 #define STEPPER_GET_DISTANCE_TO_GO 52
 #define STEPPER_GET_TARGET_POSITION 53
 #define GET_FEATURES 54
+#define SERVO_WRITE_MICROSECONDS 55
 
 
 /* Command Forward References*/
@@ -202,6 +203,8 @@ extern void are_you_there();
 extern void servo_attach();
 
 extern void servo_write();
+
+extern void servo_write_microseconds();
 
 extern void servo_detach();
 
@@ -370,6 +373,7 @@ command_descriptor command_table[] =
   {&stepper_get_distance_to_go},
   (&stepper_get_target_position),
   (&get_features),
+  (&servo_write_microseconds),
 };
 
 
@@ -888,6 +892,25 @@ void servo_write()
     {
 
       servos[i].write(angle);
+      return;
+    }
+  }
+#endif
+}
+
+// set a servo to a given microseconds (pulse width)
+void servo_write_microseconds()
+{
+#ifdef SERVO_ENABLED
+  byte pin = command_buffer[0];
+  int microseconds = (command_buffer[1] << 8) + command_buffer[2];
+  // find the servo object for the pin
+  for (int i = 0; i < MAX_SERVOS; i++)
+  {
+    if (pin_to_servo_index_map[i] == pin)
+    {
+
+      servos[i].writeMicroseconds(microseconds);
       return;
     }
   }
