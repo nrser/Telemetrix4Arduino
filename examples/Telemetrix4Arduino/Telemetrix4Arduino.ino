@@ -409,7 +409,14 @@ byte command_buffer[MAX_COMMAND_LENGTH];
 #define STEPPER_RUNNING_REPORT 18
 #define STEPPER_RUN_COMPLETE_REPORT 19
 #define FEATURES 20
+#define SERVO_READ 21
 #define DEBUG_PRINT 99
+
+// Report error codes
+
+// Sent when asked to read a servo value but a servo is not found at the given
+// pin
+#define ERROR_SERVO_NOT_FOUND = -1;
 
 #ifdef I2C_ENABLED
 // A buffer to hold i2c report data
@@ -876,6 +883,72 @@ void servo_attach()
     byte report_message[2] = {SERVO_UNAVAILABLE, pin};
     Serial.write(report_message, 2);
   }
+#endif
+}
+
+/**
+ * @brief Report the angle (between 0 and 180) that a servo attached to a pin
+ *        was last set to.
+ * 
+ * Write a fixed-length report message of `5` bytes to the serial connection.
+ * 
+ * The message is formatted:
+ * 
+ * | offset |      0      |        1        |    2    |  3   |  4   |
+ * | ------ | ----------- | --------------- | ------- | ----------- |
+ * | value  | length: u8  | message_id: u8  | pin: u8 | angle: i16  |
+ * 
+ * > * `uN` is short for uintN (N-bit _unsigned_ integer)
+ * > * `iN` is short for `intN` (N-bit _signed_ integer)
+ * 
+ * `angle` is encoded as an `int16` (signed 16-bit integer) to support the
+ * value range of [0, 180] and negative values as error codes.
+ * 
+ * @note  If servo support was not compiled-in (`SERVO_ENABLED` was not
+ *        defined) then this handler simple does _nothing_. The Telemetrix
+ *        client will receive no message, and no indicator that the operation is
+ *        unsupported. This follows with the pattern I see in other handlers.
+ * 
+ * @see   https://www.arduino.cc/reference/en/libraries/servo/read/
+ */
+void servo_read()
+{
+#ifdef SERVO_ENABLED
+  
+  // If we don't find the servo 
+  int angle = ERROR_SERVO_NOT_FOUND;
+  
+  byte pin = command_buffer[0];
+  
+  // Find the servo object for the pin
+  // 
+  // NOTE I'm not really sure why this lookup table is implemented like this...
+  //      `pin_to_servo_index_map` seems to be used as a lookup table to get
+  //      the servo for a given pin, but the table is actually
+  //      
+  //          servo_index -> pin
+  //      
+  //      which means you need to iterate over it every time you want to find a
+  //      servo's index by it's pin.
+  //      
+  //      In fact, I don't see any code that goes the efficient way — finding a
+  //      servo's pin given it's index.
+  //      
+  for (int i = 0; i < MAX_SERVOS; i++)
+  {
+    if (pin_to_servo_index_map[i] == pin)
+    {
+      angle = servos[i].read();
+      break;
+    }
+  }
+
+  byte report_message[5] = {4, SERVO_READ, pin}
+  
+  // Write `angle` as big-endian 
+  report_message[3] = (byte) ((angle & 0x0000FF00) >> 8);
+  report_message[4] = (byte) (angle & 0x000000FF);
+  
 #endif
 }
 
