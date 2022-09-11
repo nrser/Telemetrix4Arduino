@@ -42,19 +42,19 @@
 
 // This will allow SPI support to be compiled into the sketch.
 // Comment this out to save sketch space for the UNO
-#define SPI_ENABLED 1
+// #define SPI_ENABLED 1
 
 // This will allow OneWire support to be compiled into the sketch.
 // Comment this out to save sketch space for the UNO
-#define ONE_WIRE_ENABLED 1
+// #define ONE_WIRE_ENABLED 1
 
 // This will allow DHT support to be compiled into the sketch.
 // Comment this out to save sketch space for the UNO
-#define DHT_ENABLED 1
+// #define DHT_ENABLED 1
 
 // This will allow sonar support to be compiled into the sketch.
 // Comment this out to save sketch space for the UNO
-#define SONAR_ENABLED 1
+// #define SONAR_ENABLED 1
 
 // This will allow servo support to be compiled into the sketch.
 // Comment this out to save sketch space for the UNO
@@ -62,14 +62,15 @@
 
 // This will allow stepper support to be compiled into the sketch.
 // Comment this out to save sketch space for the UNO
-#define STEPPERS_ENABLED 1
+// #define STEPPERS_ENABLED 1
 
 // This will allow I2C support to be compiled into the sketch.
 // Comment this out to save sketch space for the UNO
-#define I2C_ENABLED 1
+// #define I2C_ENABLED 1
 
 
 #include <Arduino.h>
+#include "TFLidar.h"
 #include "Telemetrix4Arduino.h"
 
 #ifdef SERVO_ENABLED
@@ -179,6 +180,9 @@
 #define STEPPER_GET_TARGET_POSITION 53
 #define GET_FEATURES 54
 #define SERVO_WRITE_MICROSECONDS 55
+#define LIDAR_INIT 56
+#define LIDAR_DEL 57
+#define LIDAR_READ 58
 
 
 /* Command Forward References*/
@@ -300,6 +304,10 @@ extern void stepper_is_running();
 
 extern void get_features();
 
+extern void lidar_init();
+extern void lidar_del();
+extern void lidar_read();
+
 // When adding a new command update the command_table.
 // The command length is the number of bytes that follow
 // the command byte itself, and does not include the command
@@ -374,6 +382,9 @@ command_descriptor command_table[] =
   (&stepper_get_target_position),
   (&get_features),
   (&servo_write_microseconds),
+  (&lidar_init),
+  (&lidar_del),
+  (&lidar_read),
 };
 
 
@@ -409,6 +420,9 @@ byte command_buffer[MAX_COMMAND_LENGTH];
 #define STEPPER_RUNNING_REPORT 18
 #define STEPPER_RUN_COMPLETE_REPORT 19
 #define FEATURES 20
+#define LIDAR_INIT_REPORT 21
+#define LIDAR_DEL_REPORT 22
+#define LIDAR_READ_REPORT 23
 #define DEBUG_PRINT 99
 
 #ifdef I2C_ENABLED
@@ -664,6 +678,39 @@ AccelStepper *steppers[MAX_NUMBER_OF_STEPPERS];
 uint8_t stepper_run_modes[MAX_NUMBER_OF_STEPPERS];
 #endif
 
+/* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
+/*            LIDAR Defines, Structures and Allocations             */
+/* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
+
+// Union used for interpreting `uint16_t` as bytes.
+union uint16_t_bytes {
+  uint16_t value;
+  byte bytes[sizeof(uint16_t)];
+};
+
+// Size of a LIDAR read response, in bytes. The response is composed of:
+// 
+// 1.   Length in bytes of the _rest_ of the message (uint8_t -> 1 byte)
+// 2.   Report type (uint8_t -> 1 byte)
+// 3.   Distance value (uint16_t -> 2 bytes)
+// 4.   Strength value (uint16_t -> 2 bytes)
+// 
+// There is no alignment padding, so that's a total of 6 bytes.
+// 
+#define LIDAR_READ_RESPONSE_SIZE (2 + (2 * sizeof(uint16_t_bytes)))
+
+// The baud rate for the UART serial connection on `Serial1` (which is the UART
+// pins)
+#define LIDAR_BAUD_RATE 115200
+
+#if defined(SEEED_XIAO_M0)
+    #define uart  Serial1
+#else
+    SoftwareSerial uart(2, 3);
+#endif
+
+TFLuna tf_luna;
+TFLidar tf_lidar(&tf_luna);
 
 /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 /*                       Command Functions                          */
@@ -1606,6 +1653,61 @@ void stepper_is_running() {
   Serial.write(report_message, 3);
 #endif
 
+}
+
+/***********************************
+   LIDAR functions
+ **********************************/
+
+void lidar_init()
+{
+  tf_lidar.begin(&uart, LIDAR_BAUD_RATE);
+  
+  byte response[2] = {1, LIDAR_INIT_REPORT};
+  Serial.write(response, 2);
+}
+
+void lidar_del()
+{
+  uart.end();
+  byte response[2] = {1, LIDAR_DEL_REPORT};
+  Serial.write(response, 2);
+}
+
+void lidar_read()
+{
+  uint16_t_bytes distance, strength;
+  
+  while(!tf_lidar.get_frame_data()){
+    delay(1);
+  }
+  
+  distance.value = tf_lidar.get_distance();
+  strength.value = tf_lidar.get_strength();
+  
+  // Declare the response bytes. See the `LIDAR_READ_RESPONSE_SIZE` definition
+  // comment for details.
+  byte response[LIDAR_READ_RESPONSE_SIZE];
+  
+  int next_index = 0;
+  
+  // First byte (index 0) is length of the _rest_ of the message, so the
+  // response length minus one 'cause we don't count this byte
+  response[next_index++] = LIDAR_READ_RESPONSE_SIZE - 1;
+  
+  // Second byte (index 1) is the report type
+  response[next_index++] = LIDAR_READ_REPORT;
+  
+  // Rest (starting at index 2) is the float
+  for (int i = 0; i < sizeof(uint16_t_bytes); i++) {
+    response[next_index++] = distance.bytes[i];
+  }
+  
+  for (int i = 0; i < sizeof(uint16_t_bytes); i++) {
+    response[next_index++] = strength.bytes[i];
+  }
+  
+  Serial.write(response, LIDAR_READ_RESPONSE_SIZE);
 }
 
 // stop all reports from being generated
